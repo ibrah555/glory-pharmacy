@@ -10,8 +10,12 @@ export default function Settings() {
     const [backups, setBackups] = useState([]);
 
     useEffect(() => {
-        axios.get('/api/backup/settings').then(r => { setSettings(r.data); setLoading(false); });
-        axios.get('/api/backup/list').then(r => setBackups(r.data));
+        axios.get('/api/backup/settings')
+            .then(r => { setSettings(r.data); setLoading(false); })
+            .catch(() => setLoading(false));
+        axios.get('/api/backup/list')
+            .then(r => setBackups(Array.isArray(r.data) ? r.data : []))
+            .catch(() => setBackups([]));
     }, []);
 
     const handleSave = async () => {

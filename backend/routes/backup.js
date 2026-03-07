@@ -13,8 +13,21 @@ router.post('/', authenticateToken, authorize('super_admin'), async (req, res) =
 
 // GET /api/backup/list — list existing backups
 router.get('/list', authenticateToken, authorize('super_admin'), async (req, res) => {
-    const backupDir = path.join(__dirname, '..', 'backups');
-    res.json(files);
+    try {
+        const backupDir = path.join(__dirname, '..', 'backups');
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+        const files = fs.readdirSync(backupDir)
+            .filter(f => f.endsWith('.sql'))
+            .map(f => {
+                const stats = fs.statSync(path.join(backupDir, f));
+                return { name: f, size: stats.size, created: stats.mtime };
+            });
+        res.json(files);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // GET /api/settings — get system settings
