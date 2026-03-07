@@ -40,7 +40,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
         SELECT p.id FROM products p
         LEFT JOIN batches b ON p.id = b.product_id
         WHERE p.is_active = 1
-        GROUP BY p.id
+        GROUP BY p.id, p.reorder_level
         HAVING COALESCE(SUM(b.quantity_remaining), 0) <= p.reorder_level
       ) as t
     `);
@@ -113,7 +113,7 @@ router.get('/top-products', authenticateToken, async (req, res) => {
       JOIN products p ON si.product_id = p.id
       JOIN sales s ON si.sale_id = s.id
       WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND s.status = 'completed'
-      GROUP BY p.id
+      GROUP BY p.id, p.name, p.category
       ORDER BY total_qty DESC
       LIMIT ?
     `, [parseInt(days), parseInt(limit)]);
@@ -333,7 +333,8 @@ router.get('/export/:type', authenticateToken, authorize('super_admin', 'store_m
             MIN(CASE WHEN b.quantity_remaining > 0 THEN b.expiry_date END) as nearest_expiry
           FROM products p LEFT JOIN batches b ON p.id = b.product_id
           WHERE p.is_active = 1
-          GROUP BY p.id ORDER BY p.name
+          GROUP BY p.id, p.name, p.category, p.reorder_level 
+          ORDER BY p.name
         `);
         break;
 
