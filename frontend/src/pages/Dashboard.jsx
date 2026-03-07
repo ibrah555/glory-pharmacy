@@ -35,11 +35,15 @@ export default function Dashboard() {
     if (!data) return <div className="empty-state"><h3>Welcome to Glory Pharmacy Management</h3><p>Could not load live metrics. Please check your connection.</p></div>;
 
     const trendData = {
-        labels: (trend || []).map(d => new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })),
+        labels: (trend || []).filter(d => d && d.date).map(d => {
+            try {
+                return new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+            } catch (e) { return 'N/A'; }
+        }),
         datasets: [
             {
                 label: 'Revenue (KES)',
-                data: (trend || []).map(d => d.revenue),
+                data: (trend || []).filter(d => d).map(d => d.revenue || 0),
                 borderColor: '#1B5E20',
                 backgroundColor: 'rgba(27,94,32,0.1)',
                 fill: true,
@@ -48,7 +52,7 @@ export default function Dashboard() {
             },
             ...(hasRole('super_admin') ? [{
                 label: 'Profit (KES)',
-                data: trend.map(d => d.profit),
+                data: (trend || []).filter(d => d).map(d => d.profit || 0),
                 borderColor: '#1565C0',
                 backgroundColor: 'rgba(21,101,192,0.1)',
                 fill: true,
@@ -59,19 +63,19 @@ export default function Dashboard() {
     };
 
     const topData = {
-        labels: (topProducts || []).map(p => p.name),
+        labels: (topProducts || []).filter(p => p).map(p => p.name || 'Unknown'),
         datasets: [{
             label: 'Units Sold',
-            data: (topProducts || []).map(p => p.total_qty),
+            data: (topProducts || []).filter(p => p).map(p => p.total_qty || 0),
             backgroundColor: ['#1B5E20', '#2E7D32', '#388E3C', '#43A047', '#4CAF50', '#66BB6A', '#81C784', '#A5D6A7'],
             borderRadius: 6,
         }],
     };
 
     const categoryData = {
-        labels: (categorySales || []).map(c => c.category),
+        labels: (categorySales || []).filter(c => c).map(c => c.category || 'Other'),
         datasets: [{
-            data: (categorySales || []).map(c => c.total_revenue),
+            data: (categorySales || []).filter(c => c).map(c => c.total_revenue || 0),
             backgroundColor: ['#1B5E20', '#1565C0', '#F57F17', '#C62828', '#6A1B9A', '#00695C', '#E65100', '#37474F'],
             borderWidth: 0,
         }],
@@ -177,13 +181,13 @@ export default function Dashboard() {
                                 <table>
                                     <thead><tr><th>ID</th><th>Amount</th><th>Cashier</th><th>Time</th></tr></thead>
                                     <tbody>
-                                        {Array.isArray(data.recent_sales) && data.recent_sales.map(s => (
-                                            <tr key={s.id}>
-                                                <td style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{s.transaction_id}</td>
+                                        {Array.isArray(data.recent_sales) && data.recent_sales.filter(s => s).map(s => (
+                                            <tr key={s.id || Math.random()}>
+                                                <td style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{s.transaction_id || 'N/A'}</td>
                                                 <td style={{ fontWeight: 700 }}>KES {fmt(s.total_amount)}</td>
-                                                <td>{s.cashier_name}</td>
+                                                <td>{s.cashier_name || 'System'}</td>
                                                 <td style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                                                    {new Date(s.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                                                    {s.created_at ? new Date(s.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
                                                 </td>
                                             </tr>
                                         ))}
