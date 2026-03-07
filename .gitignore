@@ -1,0 +1,5 @@
+node_modules
+dist
+.env
+glory_pharmacy.db
+glory_pharmacy_backup_*.db
