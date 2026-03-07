@@ -17,24 +17,22 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        Promise.all([
-            axios.get('/api/reports/dashboard'),
-            axios.get('/api/reports/sales-trend?days=30'),
-            axios.get('/api/reports/top-products?limit=8'),
-            axios.get('/api/reports/category-sales'),
-            axios.get('/api/reports/smart-insights'),
-        ]).then(([d, t, tp, cs, ins]) => {
-            setData(d.data);
-            setTrend(t.data);
-            setTopProducts(tp.data);
-            setCategorySales(cs.data);
-            setInsights(ins.data);
+        // Load main dashboard metrics
+        axios.get('/api/reports/dashboard').then(res => {
+            setData(res.data);
             setLoading(false);
         }).catch(() => setLoading(false));
+
+        // Load other data independently
+        axios.get('/api/reports/sales-trend?days=30').then(res => setTrend(res.data));
+        axios.get('/api/reports/top-products?limit=8').then(res => setTopProducts(res.data));
+        axios.get('/api/reports/category-sales').then(res => setCategorySales(res.data));
+        axios.get('/api/reports/smart-insights').then(res => setInsights(res.data));
     }, []);
 
-    if (loading) return <div className="loading"><div className="spinner"></div>Loading dashboard...</div>;
-    if (!data) return <div className="empty-state"><h3>Failed to load dashboard</h3></div>;
+    if (loading) return <div className="loading"><div className="spinner"></div>Loading dashboard metrics...</div>;
+    // Show empty state only if primary metrics fail
+    if (!data) return <div className="empty-state"><h3>Welcome to Glory Pharmacy Management</h3><p>Could not load live metrics. Please check your connection.</p></div>;
 
     const trendData = {
         labels: trend.map(d => new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })),

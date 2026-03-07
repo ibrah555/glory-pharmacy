@@ -10,63 +10,68 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
   try {
     const db = await getDb();
 
-    const [todayRows] = await db.query(`
-      SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
-      FROM sales WHERE DATE(created_at) = CURDATE() AND status = 'completed'
-    `);
+    const [
+      [todayRows],
+      [weekRows],
+      [monthRows],
+      [inventoryValueRows],
+      [lowStockRows],
+      [expiringRows],
+      [expiredRows],
+      [totalProductsRows],
+      [recentSales]
+    ] = await Promise.all([
+      db.query(`
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        FROM sales WHERE DATE(created_at) = CURDATE() AND status = 'completed'
+      `),
+      db.query(`
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        FROM sales WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND status = 'completed'
+      `),
+      db.query(`
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
+        FROM sales WHERE created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01') AND status = 'completed'
+      `),
+      db.query(`
+        SELECT COALESCE(SUM(b.quantity_remaining * b.selling_price), 0) as retail_value,
+               COALESCE(SUM(b.quantity_remaining * b.cost_price), 0) as cost_value
+        FROM batches b WHERE b.quantity_remaining > 0
+      `),
+      db.query(`
+        SELECT COUNT(*) as count FROM (
+          SELECT p.id FROM products p
+          LEFT JOIN batches b ON p.id = b.product_id
+          WHERE p.is_active = 1
+          GROUP BY p.id, p.reorder_level
+          HAVING COALESCE(SUM(b.quantity_remaining), 0) <= p.reorder_level
+        ) as t
+      `),
+      db.query(`
+        SELECT COUNT(*) as count FROM batches
+        WHERE expiry_date <= DATE_ADD(CURDATE(), INTERVAL 3 MONTH) AND quantity_remaining > 0
+      `),
+      db.query(`
+        SELECT COUNT(*) as count FROM batches
+        WHERE expiry_date < CURDATE() AND quantity_remaining > 0
+      `),
+      db.query('SELECT COUNT(*) as count FROM products WHERE is_active = 1'),
+      db.query(`
+        SELECT s.*, u.full_name as cashier_name
+        FROM sales s JOIN users u ON s.user_id = u.id
+        WHERE s.status = 'completed'
+        ORDER BY s.created_at DESC LIMIT 10
+      `)
+    ]);
+
     const today = todayRows[0];
-
-    const [weekRows] = await db.query(`
-      SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
-      FROM sales WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND status = 'completed'
-    `);
     const week = weekRows[0];
-
-    const [monthRows] = await db.query(`
-      SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
-      FROM sales WHERE created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01') AND status = 'completed'
-    `);
     const month = monthRows[0];
-
-    const [inventoryValueRows] = await db.query(`
-      SELECT COALESCE(SUM(b.quantity_remaining * b.selling_price), 0) as retail_value,
-             COALESCE(SUM(b.quantity_remaining * b.cost_price), 0) as cost_value
-      FROM batches b WHERE b.quantity_remaining > 0
-    `);
     const inventoryValue = inventoryValueRows[0];
-
-    const [lowStockRows] = await db.query(`
-      SELECT COUNT(*) as count FROM (
-        SELECT p.id FROM products p
-        LEFT JOIN batches b ON p.id = b.product_id
-        WHERE p.is_active = 1
-        GROUP BY p.id, p.reorder_level
-        HAVING COALESCE(SUM(b.quantity_remaining), 0) <= p.reorder_level
-      ) as t
-    `);
     const lowStockCount = lowStockRows[0];
-
-    const [expiringRows] = await db.query(`
-      SELECT COUNT(*) as count FROM batches
-      WHERE expiry_date <= DATE_ADD(CURDATE(), INTERVAL 3 MONTH) AND quantity_remaining > 0
-    `);
     const expiringCount = expiringRows[0];
-
-    const [expiredRows] = await db.query(`
-      SELECT COUNT(*) as count FROM batches
-      WHERE expiry_date < CURDATE() AND quantity_remaining > 0
-    `);
     const expiredCount = expiredRows[0];
-
-    const [totalProductsRows] = await db.query('SELECT COUNT(*) as count FROM products WHERE is_active = 1');
     const totalProducts = totalProductsRows[0];
-
-    const [recentSales] = await db.query(`
-      SELECT s.*, u.full_name as cashier_name
-      FROM sales s JOIN users u ON s.user_id = u.id
-      WHERE s.status = 'completed'
-      ORDER BY s.created_at DESC LIMIT 10
-    `);
 
     res.json({
       today: { ...today },
@@ -76,7 +81,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
       low_stock_count: lowStockCount.count,
       expiring_count: expiringCount.count,
       expired_count: expiredCount.count,
-      recent_sales: recentSales,
+      recent_sales: recentSales[0],
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -201,17 +206,29 @@ router.get('/smart-insights', authenticateToken, async (req, res) => {
     const db = await getDb();
     const insights = [];
 
-    // Fast movers: products with >25% increase in sales
+    // Fast movers: products with >25% increase in sales (Recent 15d vs Prev 15d)
     const [fastMovers] = await db.query(`
-      SELECT * FROM (
-        SELECT p.name,
-          COALESCE((SELECT SUM(si.quantity) FROM sale_items si JOIN sales s ON si.sale_id = s.id
-            WHERE si.product_id = p.id AND s.created_at >= DATE_SUB(CURDATE(), INTERVAL 15 DAY) AND s.status='completed'), 0) as recent_sales,
-          COALESCE((SELECT SUM(si.quantity) FROM sale_items si JOIN sales s ON si.sale_id = s.id
-            WHERE si.product_id = p.id AND s.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) AND s.created_at < DATE_SUB(CURDATE(), INTERVAL 15 DAY) AND s.status='completed'), 0) as prev_sales
-        FROM products p WHERE p.is_active = 1
-      ) as t
-      WHERE recent_sales > 0 AND prev_sales > 0 AND (recent_sales * 1.0 / prev_sales) > 1.25
+      SELECT p.name, 
+             COALESCE(recent.qty, 0) as recent_sales, 
+             COALESCE(prev.qty, 0) as prev_sales
+      FROM products p
+      LEFT JOIN (
+        SELECT si.product_id, SUM(si.quantity) as qty 
+        FROM sale_items si JOIN sales s ON si.sale_id = s.id 
+        WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL 15 DAY) AND s.status='completed'
+        GROUP BY si.product_id
+      ) as recent ON p.id = recent.product_id
+      LEFT JOIN (
+        SELECT si.product_id, SUM(si.quantity) as qty 
+        FROM sale_items si JOIN sales s ON si.sale_id = s.id 
+        WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) 
+        AND s.created_at < DATE_SUB(CURDATE(), INTERVAL 15 DAY) AND s.status='completed'
+        GROUP BY si.product_id
+      ) as prev ON p.id = prev.product_id
+      WHERE p.is_active = 1
+      AND COALESCE(recent.qty, 0) > 0 
+      AND COALESCE(prev.qty, 0) > 0 
+      AND (COALESCE(recent.qty, 0) / COALESCE(prev.qty, 0)) > 1.25
     `);
 
     for (const fm of fastMovers) {
@@ -229,13 +246,13 @@ router.get('/smart-insights', authenticateToken, async (req, res) => {
       SELECT p.name, COALESCE(SUM(b.quantity_remaining), 0) as stock
       FROM products p
       LEFT JOIN batches b ON p.id = b.product_id
-      WHERE p.is_active = 1
-      AND p.id NOT IN (
+      LEFT JOIN (
         SELECT DISTINCT si.product_id FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
         WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) AND s.status = 'completed'
-      )
-      GROUP BY p.id
+      ) as recent_sales ON p.id = recent_sales.product_id
+      WHERE p.is_active = 1 AND recent_sales.product_id IS NULL
+      GROUP BY p.id, p.name
       HAVING stock > 0
     `);
 
