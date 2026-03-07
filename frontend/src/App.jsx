@@ -26,7 +26,10 @@ function AppLayout({ children }) {
     return (
         <div className="app-layout">
             <Sidebar />
-            <main className="main-content">{children}</main>
+            <div className="main-content">
+                <main style={{ flex: 1 }}>{children}</main>
+                <Footer />
+            </div>
         </div>
     );
 }

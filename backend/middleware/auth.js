@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = 'glory-pharmacy-secret-key-2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'glory-pharmacy-secret-key-2026';
 const JWT_EXPIRY = '8h';
 
 function generateToken(user) {
