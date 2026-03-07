@@ -18,10 +18,6 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Initialize database
-getDb();
-console.log('📦 Database initialized.');
-
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/inventory', inventoryRoutes);
@@ -42,10 +38,24 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-    console.log(`\n🏥 Glory Pharmacy Management System`);
-    console.log(`🌐 Server running on http://localhost:${PORT}`);
-    console.log(`📊 API available at http://localhost:${PORT}/api\n`);
-});
+// Initialize database and start server
+async function startServer() {
+    try {
+        await getDb();
+        console.log('📦 Database initialized.');
+
+        app.listen(PORT, () => {
+            console.log(`\n🏥 Glory Pharmacy Management System`);
+            console.log(`🌐 Server running on http://localhost:${PORT}`);
+            console.log(`📊 API available at http://localhost:${PORT}/api\n`);
+        });
+    } catch (err) {
+        console.error('❌ Failed to initialize database:', err);
+        process.exit(1);
+    }
+}
+
+startServer();
 
 module.exports = app;
+

@@ -1,187 +1,177 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+const mysql = require('mysql2/promise');
+require('dotenv').config();
 
-const DB_PATH = path.join(__dirname, 'glory_pharmacy.db');
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'glory_pharmacy',
+  port: process.env.DB_PORT || 3306,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
 
-let db;
-
-function getDb() {
-    if (!db) {
-        db = new Database(DB_PATH);
-        db.pragma('journal_mode = WAL');
-        db.pragma('foreign_keys = ON');
-        initializeDatabase();
-    }
-    return db;
+async function getDb() {
+  return pool;
 }
 
-function initializeDatabase() {
-    db.exec(`
+async function initializeDatabase() {
+  const db = await getDb();
+
+  // Create tables using MySQL syntax
+  await db.query(`
     -- Users table
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      full_name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('super_admin','store_manager','pharmacist','cashier')),
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      username VARCHAR(255) UNIQUE NOT NULL,
+      full_name VARCHAR(255) NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      role ENUM('super_admin','store_manager','pharmacist','cashier') NOT NULL,
+      is_active TINYINT DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`);
 
+  await db.query(`
     -- Products table
     CREATE TABLE IF NOT EXISTS products (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      generic_name TEXT,
-      brand_name TEXT,
-      category TEXT NOT NULL,
-      dosage_form TEXT NOT NULL CHECK(dosage_form IN ('Tablet','Syrup','Capsule','Injection','Cream','Other')),
-      strength TEXT,
-      reorder_level INTEGER DEFAULT 10,
-      storage_location TEXT,
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(255) NOT NULL,
+      generic_name VARCHAR(255),
+      brand_name VARCHAR(255),
+      category VARCHAR(255) NOT NULL,
+      dosage_form ENUM('Tablet','Syrup','Capsule','Injection','Cream','Other') NOT NULL,
+      strength VARCHAR(255),
+      reorder_level INT DEFAULT 10,
+      storage_location VARCHAR(255),
+      is_active TINYINT DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`);
 
+  await db.query(`
     -- Suppliers table
     CREATE TABLE IF NOT EXISTS suppliers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      contact_person TEXT,
-      phone TEXT,
-      email TEXT,
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(255) NOT NULL,
+      contact_person VARCHAR(255),
+      phone VARCHAR(50),
+      email VARCHAR(255),
       address TEXT,
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      is_active TINYINT DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
 
-    -- Batches table (tracks stock by batch + expiry)
+  await db.query(`
+    -- Batches table
     CREATE TABLE IF NOT EXISTS batches (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL,
-      batch_number TEXT NOT NULL,
-      expiry_date TEXT NOT NULL,
-      cost_price REAL NOT NULL,
-      selling_price REAL NOT NULL,
-      quantity_received INTEGER NOT NULL,
-      quantity_sold INTEGER DEFAULT 0,
-      quantity_damaged INTEGER DEFAULT 0,
-      quantity_remaining INTEGER NOT NULL,
-      supplier_id INTEGER,
-      received_by INTEGER,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      product_id INT NOT NULL,
+      batch_number VARCHAR(255) NOT NULL,
+      expiry_date DATE NOT NULL,
+      cost_price DECIMAL(10,2) NOT NULL,
+      selling_price DECIMAL(10,2) NOT NULL,
+      quantity_received INT NOT NULL,
+      quantity_sold INT DEFAULT 0,
+      quantity_damaged INT DEFAULT 0,
+      quantity_remaining INT NOT NULL,
+      supplier_id INT,
+      received_by INT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (product_id) REFERENCES products(id),
       FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
       FOREIGN KEY (received_by) REFERENCES users(id)
-    );
+    )`);
 
+  await db.query(`
     -- Sales table
     CREATE TABLE IF NOT EXISTS sales (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      transaction_id TEXT UNIQUE NOT NULL,
-      user_id INTEGER NOT NULL,
-      total_amount REAL NOT NULL,
-      total_cost REAL NOT NULL DEFAULT 0,
-      profit REAL NOT NULL DEFAULT 0,
-      payment_method TEXT NOT NULL CHECK(payment_method IN ('cash','mpesa','card')),
-      mpesa_phone TEXT,
-      mpesa_receipt TEXT,
-      status TEXT DEFAULT 'completed' CHECK(status IN ('completed','cancelled','pending')),
-      created_at TEXT DEFAULT (datetime('now','localtime')),
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      transaction_id VARCHAR(50) UNIQUE NOT NULL,
+      user_id INT NOT NULL,
+      total_amount DECIMAL(10,2) NOT NULL,
+      total_cost DECIMAL(10,2) NOT NULL DEFAULT 0,
+      profit DECIMAL(10,2) NOT NULL DEFAULT 0,
+      payment_method ENUM('cash','mpesa','card') NOT NULL,
+      mpesa_phone VARCHAR(20),
+      mpesa_receipt VARCHAR(50),
+      status ENUM('completed','cancelled','pending') DEFAULT 'completed',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
-    );
+    )`);
 
+  await db.query(`
     -- Sale items table
     CREATE TABLE IF NOT EXISTS sale_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sale_id INTEGER NOT NULL,
-      product_id INTEGER NOT NULL,
-      batch_id INTEGER NOT NULL,
-      quantity INTEGER NOT NULL,
-      unit_price REAL NOT NULL,
-      cost_price REAL NOT NULL,
-      subtotal REAL NOT NULL,
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      sale_id INT NOT NULL,
+      product_id INT NOT NULL,
+      batch_id INT NOT NULL,
+      quantity INT NOT NULL,
+      unit_price DECIMAL(10,2) NOT NULL,
+      cost_price DECIMAL(10,2) NOT NULL,
+      subtotal DECIMAL(10,2) NOT NULL,
       FOREIGN KEY (sale_id) REFERENCES sales(id),
       FOREIGN KEY (product_id) REFERENCES products(id),
       FOREIGN KEY (batch_id) REFERENCES batches(id)
-    );
+    )`);
 
+  await db.query(`
     -- Stock adjustments table
     CREATE TABLE IF NOT EXISTS stock_adjustments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL,
-      batch_id INTEGER,
-      user_id INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('damaged','expired','adjustment','return')),
-      quantity INTEGER NOT NULL,
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      product_id INT NOT NULL,
+      batch_id INT,
+      user_id INT NOT NULL,
+      type ENUM('damaged','expired','adjustment','return') NOT NULL,
+      quantity INT NOT NULL,
       reason TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (product_id) REFERENCES products(id),
       FOREIGN KEY (batch_id) REFERENCES batches(id),
       FOREIGN KEY (user_id) REFERENCES users(id)
-    );
+    )`);
 
+  await db.query(`
     -- Audit logs table
     CREATE TABLE IF NOT EXISTS audit_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      username TEXT,
-      action TEXT NOT NULL,
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT,
+      username VARCHAR(255),
+      action VARCHAR(255) NOT NULL,
       details TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
-    );
+    )`);
 
+  await db.query(`
     -- System settings table
     CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT,
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      setting_key VARCHAR(255) PRIMARY KEY,
+      setting_value TEXT,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`);
 
-    -- Create indexes for performance
-    CREATE INDEX IF NOT EXISTS idx_batches_product ON batches(product_id);
-    CREATE INDEX IF NOT EXISTS idx_batches_expiry ON batches(expiry_date);
-    CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at);
-    CREATE INDEX IF NOT EXISTS idx_sales_user ON sales(user_id);
-    CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
-    CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
-    CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_logs(created_at);
-  `);
+  // Insert default settings
+  const defaultSettings = [
+    ['pharmacy_name', 'Glory Pharmacy'],
+    ['pharmacy_location', 'Hola, Tana River County, Kenya'],
+    ['pharmacy_phone', ''],
+    ['pharmacy_email', ''],
+    ['mpesa_consumer_key', ''],
+    ['mpesa_consumer_secret', ''],
+    ['mpesa_shortcode', ''],
+    ['mpesa_passkey', ''],
+    ['mpesa_environment', 'sandbox'],
+    ['backup_path', ''],
+    ['expiry_alert_months', '3'],
+  ];
 
-    // Insert default settings if not present
-    const settingsInsert = db.prepare(
-        'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)'
-    );
-    const defaultSettings = [
-        ['pharmacy_name', 'Glory Pharmacy'],
-        ['pharmacy_location', 'Hola, Tana River County, Kenya'],
-        ['pharmacy_phone', ''],
-        ['pharmacy_email', ''],
-        ['mpesa_consumer_key', ''],
-        ['mpesa_consumer_secret', ''],
-        ['mpesa_shortcode', ''],
-        ['mpesa_passkey', ''],
-        ['mpesa_environment', 'sandbox'],
-        ['backup_path', ''],
-        ['expiry_alert_months', '3'],
-    ];
-    const insertMany = db.transaction(() => {
-        for (const [key, value] of defaultSettings) {
-            settingsInsert.run(key, value);
-        }
-    });
-    insertMany();
+  for (const [key, value] of defaultSettings) {
+    await db.query('INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (?, ?)', [key, value]);
+  }
 }
 
-function backupDatabase(targetPath) {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupFile = path.join(targetPath, `glory_pharmacy_backup_${timestamp}.db`);
-    fs.copyFileSync(DB_PATH, backupFile);
-    return backupFile;
-}
+module.exports = { getDb, initializeDatabase };
 
-module.exports = { getDb, backupDatabase, DB_PATH };
