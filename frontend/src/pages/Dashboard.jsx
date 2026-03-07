@@ -35,11 +35,11 @@ export default function Dashboard() {
     if (!data) return <div className="empty-state"><h3>Welcome to Glory Pharmacy Management</h3><p>Could not load live metrics. Please check your connection.</p></div>;
 
     const trendData = {
-        labels: trend.map(d => new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })),
+        labels: (trend || []).map(d => new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })),
         datasets: [
             {
                 label: 'Revenue (KES)',
-                data: trend.map(d => d.revenue),
+                data: (trend || []).map(d => d.revenue),
                 borderColor: '#1B5E20',
                 backgroundColor: 'rgba(27,94,32,0.1)',
                 fill: true,
@@ -59,19 +59,19 @@ export default function Dashboard() {
     };
 
     const topData = {
-        labels: topProducts.map(p => p.name),
+        labels: (topProducts || []).map(p => p.name),
         datasets: [{
             label: 'Units Sold',
-            data: topProducts.map(p => p.total_qty),
+            data: (topProducts || []).map(p => p.total_qty),
             backgroundColor: ['#1B5E20', '#2E7D32', '#388E3C', '#43A047', '#4CAF50', '#66BB6A', '#81C784', '#A5D6A7'],
             borderRadius: 6,
         }],
     };
 
     const categoryData = {
-        labels: categorySales.map(c => c.category),
+        labels: (categorySales || []).map(c => c.category),
         datasets: [{
-            data: categorySales.map(c => c.total_revenue),
+            data: (categorySales || []).map(c => c.total_revenue),
             backgroundColor: ['#1B5E20', '#1565C0', '#F57F17', '#C62828', '#6A1B9A', '#00695C', '#E65100', '#37474F'],
             borderWidth: 0,
         }],
@@ -171,13 +171,13 @@ export default function Dashboard() {
                     <div className="card">
                         <div className="card-header"><h3>🕐 Recent Sales</h3></div>
                         <div className="card-body" style={{ maxHeight: 300, overflowY: 'auto' }}>
-                            {data.recent_sales.length === 0 ? (
+                            {(!data.recent_sales || data.recent_sales.length === 0) ? (
                                 <div className="empty-state"><p>No sales yet</p></div>
                             ) : (
                                 <table>
                                     <thead><tr><th>ID</th><th>Amount</th><th>Cashier</th><th>Time</th></tr></thead>
                                     <tbody>
-                                        {data.recent_sales.map(s => (
+                                        {Array.isArray(data.recent_sales) && data.recent_sales.map(s => (
                                             <tr key={s.id}>
                                                 <td style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{s.transaction_id}</td>
                                                 <td style={{ fontWeight: 700 }}>KES {fmt(s.total_amount)}</td>

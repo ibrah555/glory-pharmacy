@@ -81,7 +81,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
       low_stock_count: lowStockCount.count,
       expiring_count: expiringCount.count,
       expired_count: expiredCount.count,
-      recent_sales: recentSales[0],
+      recent_sales: recentSales,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
