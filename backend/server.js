@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { getDb } = require('./database');
+const { getDb, initializeDatabase } = require('./database');
 
 const authRoutes = require('./routes/auth');
 const inventoryRoutes = require('./routes/inventory');
@@ -41,8 +41,8 @@ app.use((err, req, res, next) => {
 // Initialize database and start server
 async function startServer() {
     try {
-        await getDb();
-        console.log('📦 Database initialized.');
+        await initializeDatabase();
+        console.log('📦 Database initialized and tables verified.');
 
         app.listen(PORT, () => {
             console.log(`\n🏥 Glory Pharmacy Management System`);
