@@ -32,6 +32,17 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', name: 'Glory Pharmacy Management System', version: '1.0.0' });
 });
 
+// Serve frontend static files in production
+if (process.env.NODE_ENV === 'production') {
+    const frontendPath = path.join(__dirname, '..', 'frontend', 'dist');
+    app.use(express.static(frontendPath));
+    
+    // Catch-all: serve index.html for client-side routing
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(frontendPath, 'index.html'));
+    });
+}
+
 // Error handling
 app.use((err, req, res, next) => {
     console.error('Server error:', err);

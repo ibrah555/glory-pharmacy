@@ -1,8 +1,9 @@
 const bcrypt = require('bcryptjs');
-const { getDb } = require('./database');
+const { getDb, initializeDatabase } = require('./database');
 
 async function seed() {
   try {
+    await initializeDatabase();
     const db = await getDb();
 
     // Check if admin already exists
