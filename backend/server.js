@@ -32,8 +32,8 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', name: 'Glory Pharmacy Management System', version: '1.0.0' });
 });
 
-// Serve frontend static files in production
-if (process.env.NODE_ENV === 'production') {
+// Serve frontend static files in production (only if NOT on Vercel)
+if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
     const frontendPath = path.join(__dirname, '..', 'frontend', 'dist');
     app.use(express.static(frontendPath));
     
@@ -55,11 +55,13 @@ async function startServer() {
         await initializeDatabase();
         console.log('📦 Database initialized and tables verified.');
 
-        app.listen(PORT, () => {
-            console.log(`\n🏥 Glory Pharmacy Management System`);
-            console.log(`🌐 Server running on http://localhost:${PORT}`);
-            console.log(`📊 API available at http://localhost:${PORT}/api\n`);
-        });
+        if (!process.env.VERCEL) {
+            app.listen(PORT, () => {
+                console.log(`\n🏥 Glory Pharmacy Management System`);
+                console.log(`🌐 Server running on http://localhost:${PORT}`);
+                console.log(`📊 API available at http://localhost:${PORT}/api\n`);
+            });
+        }
     } catch (err) {
         console.error('❌ Failed to initialize database:', err);
         process.exit(1);
