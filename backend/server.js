@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const path = require('path');
 const { getDb, initializeDatabase } = require('./database');
 
@@ -30,6 +31,30 @@ app.use('/api/backup', backupRoutes);
 // Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', name: 'Glory Pharmacy Management System', version: '1.0.0' });
+});
+
+// Debug route to see files on Vercel
+app.get('/api/debug-files', (req, res) => {
+    const getFiles = (dir) => {
+        const results = [];
+        const list = fs.readdirSync(dir);
+        list.forEach(file => {
+            file = path.join(dir, file);
+            const stat = fs.statSync(file);
+            if (stat && stat.isDirectory()) {
+                results.push({ name: file, type: 'dir' });
+            } else {
+                results.push({ name: file, type: 'file', size: stat.size });
+            }
+        });
+        return results;
+    };
+    try {
+        const rootFiles = getFiles(path.join(__dirname, '..'));
+        res.json({ root: rootFiles, dirname: __dirname });
+    } catch (err) {
+        res.json({ error: err.message, dirname: __dirname });
+    }
 });
 
 // Serve frontend static files in production (only if NOT on Vercel)
