@@ -19,7 +19,7 @@ router.get('/', authenticateToken, async (req, res) => {
 router.get('/:id', authenticateToken, async (req, res) => {
     try {
         const db = await getDb();
-        const [rows] = await db.query('SELECT * FROM suppliers WHERE id = ?', [req.params.id]);
+        const [rows] = await db.query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
         const supplier = rows[0];
         if (!supplier) return res.status(404).json({ error: 'Supplier not found.' });
 
@@ -28,7 +28,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
       SELECT b.*, p.name as product_name
       FROM batches b
       JOIN products p ON b.product_id = p.id
-      WHERE b.supplier_id = ?
+      WHERE b.supplier_id = $1
       ORDER BY b.created_at DESC
       LIMIT 50
     `, [req.params.id]);
@@ -46,15 +46,15 @@ router.post('/', authenticateToken, authorize('super_admin', 'store_manager'), a
 
     try {
         const db = await getDb();
-        const [result] = await db.query(
-            'INSERT INTO suppliers (name, contact_person, phone, email, address) VALUES (?, ?, ?, ?, ?)',
+        const [rows] = await db.query(
+            'INSERT INTO suppliers (name, contact_person, phone, email, address) VALUES ($1, $2, $3, $4, $5) RETURNING id',
             [name, contact_person || null, phone || null, email || null, address || null]
         );
 
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'SUPPLIER_CREATE', `Created supplier: ${name}`]);
 
-        res.status(201).json({ id: result.insertId, message: 'Supplier created.' });
+        res.status(201).json({ id: rows[0].id, message: 'Supplier created.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -66,17 +66,17 @@ router.put('/:id', authenticateToken, authorize('super_admin', 'store_manager'),
 
     try {
         const db = await getDb();
-        const [rows] = await db.query('SELECT * FROM suppliers WHERE id = ?', [req.params.id]);
+        const [rows] = await db.query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
         const supplier = rows[0];
         if (!supplier) return res.status(404).json({ error: 'Supplier not found.' });
 
         await db.query(`
-      UPDATE suppliers SET name = ?, contact_person = ?, phone = ?, email = ?, address = ?
-      WHERE id = ?
+      UPDATE suppliers SET name = $1, contact_person = $2, phone = $3, email = $4, address = $5
+      WHERE id = $6
     `, [name || supplier.name, contact_person ?? supplier.contact_person, phone ?? supplier.phone,
         email ?? supplier.email, address ?? supplier.address, req.params.id]);
 
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'SUPPLIER_UPDATE', `Updated supplier ID: ${req.params.id}`]);
 
         res.json({ message: 'Supplier updated.' });
@@ -95,23 +95,23 @@ router.post('/restock', authenticateToken, authorize('super_admin', 'store_manag
 
     try {
         const db = await getDb();
-        const [productRows] = await db.query('SELECT * FROM products WHERE id = ?', [product_id]);
+        const [productRows] = await db.query('SELECT * FROM products WHERE id = $1', [product_id]);
         const product = productRows[0];
         if (!product) return res.status(404).json({ error: 'Product not found.' });
 
-        const [result] = await db.query(`
+        const [rows] = await db.query(`
       INSERT INTO batches (product_id, batch_number, expiry_date, cost_price, selling_price, quantity_received, quantity_remaining, supplier_id, received_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id
     `, [product_id, batch_number, expiry_date, cost_price, selling_price, quantity, quantity, supplier_id || null, req.user.id]);
 
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'RESTOCK', `Restocked ${quantity} units of ${product.name} (Batch: ${batch_number})`]);
 
-        res.status(201).json({ id: result.insertId, message: 'Stock restocked successfully.' });
+        res.status(201).json({ id: rows[0].id, message: 'Stock restocked successfully.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 module.exports = router;
-

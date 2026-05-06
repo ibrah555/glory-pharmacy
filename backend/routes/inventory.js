@@ -21,22 +21,27 @@ router.get('/products', authenticateToken, async (req, res) => {
     const params = [];
 
     if (category) {
-        query += ' AND p.category = ?';
         params.push(category);
+        query += ` AND p.category = $${params.length}`;
     }
     if (search) {
-        query += ' AND (p.name LIKE ? OR p.generic_name LIKE ? OR p.brand_name LIKE ?)';
         const s = `%${search}%`;
         params.push(s, s, s);
+        query += ` AND (p.name LIKE $${params.length - 2} OR p.generic_name LIKE $${params.length - 1} OR p.brand_name LIKE $${params.length})`;
     }
 
     query += ' GROUP BY p.id';
 
+    const havingClauses = [];
     if (low_stock === 'true') {
-        query += ' HAVING total_stock <= p.reorder_level';
+        havingClauses.push('COALESCE(SUM(b.quantity_remaining), 0) <= p.reorder_level');
     }
     if (expiring === 'true') {
-        query += ` HAVING nearest_expiry <= DATE_ADD(CURDATE(), INTERVAL 3 MONTH)`;
+        havingClauses.push(`MIN(CASE WHEN b.quantity_remaining > 0 THEN b.expiry_date END) <= CURRENT_DATE + INTERVAL '3 months'`);
+    }
+
+    if (havingClauses.length > 0) {
+        query += ' HAVING ' + havingClauses.join(' AND ');
     }
 
     query += ' ORDER BY p.name';
@@ -54,7 +59,7 @@ router.get('/products', authenticateToken, async (req, res) => {
 router.get('/products/:id', authenticateToken, async (req, res) => {
     try {
         const db = await getDb();
-        const [productRows] = await db.query('SELECT * FROM products WHERE id = ?', [req.params.id]);
+        const [productRows] = await db.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
         const product = productRows[0];
         if (!product) return res.status(404).json({ error: 'Product not found.' });
 
@@ -62,7 +67,7 @@ router.get('/products/:id', authenticateToken, async (req, res) => {
       SELECT b.*, s.name as supplier_name
       FROM batches b
       LEFT JOIN suppliers s ON b.supplier_id = s.id
-      WHERE b.product_id = ?
+      WHERE b.product_id = $1
       ORDER BY b.expiry_date ASC
     `, [req.params.id]);
 
@@ -82,16 +87,17 @@ router.post('/products', authenticateToken, authorize('super_admin', 'store_mana
 
     try {
         const db = await getDb();
-        const [result] = await db.query(`
+        const [rows] = await db.query(`
       INSERT INTO products (name, generic_name, brand_name, category, dosage_form, strength, reorder_level, storage_location)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id
     `, [name, generic_name || null, brand_name || null, category, dosage_form, strength || null, reorder_level || 10, storage_location || null]);
 
         // Audit log
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'PRODUCT_CREATE', `Created product: ${name}`]);
 
-        res.status(201).json({ id: result.insertId, message: 'Product created.' });
+        res.status(201).json({ id: rows[0].id, message: 'Product created.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -103,21 +109,21 @@ router.put('/products/:id', authenticateToken, authorize('super_admin', 'store_m
 
     try {
         const db = await getDb();
-        const [rows] = await db.query('SELECT * FROM products WHERE id = ?', [req.params.id]);
+        const [rows] = await db.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
         const product = rows[0];
         if (!product) return res.status(404).json({ error: 'Product not found.' });
 
         await db.query(`
-      UPDATE products SET name = ?, generic_name = ?, brand_name = ?, category = ?, dosage_form = ?,
-      strength = ?, reorder_level = ?, storage_location = ?
-      WHERE id = ?
+      UPDATE products SET name = $1, generic_name = $2, brand_name = $3, category = $4, dosage_form = $5,
+      strength = $6, reorder_level = $7, storage_location = $8
+      WHERE id = $9
     `, [
             name || product.name, generic_name ?? product.generic_name, brand_name ?? product.brand_name,
             category || product.category, dosage_form || product.dosage_form, strength ?? product.strength,
             reorder_level ?? product.reorder_level, storage_location ?? product.storage_location, req.params.id
         ]);
 
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'PRODUCT_UPDATE', `Updated product ID: ${req.params.id}`]);
 
         res.json({ message: 'Product updated.' });
@@ -145,7 +151,7 @@ router.get('/batches/:productId', authenticateToken, async (req, res) => {
       SELECT b.*, s.name as supplier_name
       FROM batches b
       LEFT JOIN suppliers s ON b.supplier_id = s.id
-      WHERE b.product_id = ?
+      WHERE b.product_id = $1
       ORDER BY b.expiry_date ASC
     `, [req.params.productId]);
         res.json(batches);
@@ -166,7 +172,7 @@ router.post('/stock-adjustment', authenticateToken, authorize('super_admin', 'st
         const db = await getDb();
 
         if (batch_id) {
-            const [batchRows] = await db.query('SELECT * FROM batches WHERE id = ?', [batch_id]);
+            const [batchRows] = await db.query('SELECT * FROM batches WHERE id = $1', [batch_id]);
             const batch = batchRows[0];
             if (!batch) return res.status(404).json({ error: 'Batch not found.' });
 
@@ -174,18 +180,18 @@ router.post('/stock-adjustment', authenticateToken, authorize('super_admin', 'st
             if (newRemaining < 0) return res.status(400).json({ error: 'Insufficient stock in batch.' });
 
             if (type === 'damaged') {
-                await db.query('UPDATE batches SET quantity_damaged = quantity_damaged + ?, quantity_remaining = ? WHERE id = ?',
+                await db.query('UPDATE batches SET quantity_damaged = quantity_damaged + $1, quantity_remaining = $2 WHERE id = $3',
                     [quantity, newRemaining, batch_id]);
             } else {
-                await db.query('UPDATE batches SET quantity_remaining = ? WHERE id = ?',
+                await db.query('UPDATE batches SET quantity_remaining = $1 WHERE id = $2',
                     [newRemaining, batch_id]);
             }
         }
 
-        await db.query('INSERT INTO stock_adjustments (product_id, batch_id, user_id, type, quantity, reason) VALUES (?, ?, ?, ?, ?, ?)',
+        await db.query('INSERT INTO stock_adjustments (product_id, batch_id, user_id, type, quantity, reason) VALUES ($1, $2, $3, $4, $5, $6)',
             [product_id, batch_id || null, req.user.id, type, quantity, reason || null]);
 
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'STOCK_ADJUSTMENT', `${type}: ${quantity} units of product ${product_id}`]);
 
         res.json({ message: 'Stock adjustment recorded.' });
@@ -202,21 +208,21 @@ router.get('/expiry-alerts', authenticateToken, async (req, res) => {
         const [expired] = await db.query(`
       SELECT b.*, p.name as product_name, p.category
       FROM batches b JOIN products p ON b.product_id = p.id
-      WHERE b.expiry_date < CURDATE() AND b.quantity_remaining > 0
+      WHERE b.expiry_date < CURRENT_DATE AND b.quantity_remaining > 0
       ORDER BY b.expiry_date
     `);
 
         const [expiring3months] = await db.query(`
       SELECT b.*, p.name as product_name, p.category
       FROM batches b JOIN products p ON b.product_id = p.id
-      WHERE b.expiry_date >= CURDATE() AND b.expiry_date <= DATE_ADD(CURDATE(), INTERVAL 3 MONTH) AND b.quantity_remaining > 0
+      WHERE b.expiry_date >= CURRENT_DATE AND b.expiry_date <= CURRENT_DATE + INTERVAL '3 months' AND b.quantity_remaining > 0
       ORDER BY b.expiry_date
     `);
 
         const [expiring6months] = await db.query(`
       SELECT b.*, p.name as product_name, p.category
       FROM batches b JOIN products p ON b.product_id = p.id
-      WHERE b.expiry_date > DATE_ADD(CURDATE(), INTERVAL 3 MONTH) AND b.expiry_date <= DATE_ADD(CURDATE(), INTERVAL 6 MONTH) AND b.quantity_remaining > 0
+      WHERE b.expiry_date > CURRENT_DATE + INTERVAL '3 months' AND b.expiry_date <= CURRENT_DATE + INTERVAL '6 months' AND b.quantity_remaining > 0
       ORDER BY b.expiry_date
     `);
 
@@ -236,7 +242,7 @@ router.get('/low-stock', authenticateToken, async (req, res) => {
       LEFT JOIN batches b ON p.id = b.product_id
       WHERE p.is_active = 1
       GROUP BY p.id
-      HAVING total_stock <= p.reorder_level
+      HAVING COALESCE(SUM(b.quantity_remaining), 0) <= p.reorder_level
       ORDER BY total_stock ASC
     `);
         res.json(products);
@@ -257,14 +263,14 @@ router.get('/reorder-suggestions', authenticateToken, async (req, res) => {
           FROM sale_items si
           JOIN sales s ON si.sale_id = s.id
           WHERE si.product_id = p.id
-          AND s.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+          AND s.created_at >= CURRENT_DATE - INTERVAL '30 days'
           AND s.status = 'completed'
         ), 0) as sold_last_30_days
       FROM products p
       LEFT JOIN batches b ON p.id = b.product_id AND b.quantity_remaining > 0
       WHERE p.is_active = 1
       GROUP BY p.id
-      HAVING current_stock <= p.reorder_level * 2
+      HAVING COALESCE(SUM(b.quantity_remaining), 0) <= p.reorder_level * 2
       ORDER BY current_stock ASC
     `);
 
@@ -284,6 +290,5 @@ router.get('/reorder-suggestions', authenticateToken, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 
 module.exports = router;

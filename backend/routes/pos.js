@@ -32,8 +32,8 @@ router.post('/sale', authenticateToken, async (req, res) => {
             // Get available batches sorted by expiry (FIFO)
             const [batches] = await conn.query(`
         SELECT b.* FROM batches b
-        WHERE b.product_id = ? AND b.quantity_remaining > 0
-        AND b.expiry_date >= CURDATE()
+        WHERE b.product_id = $1 AND b.quantity_remaining > 0
+        AND b.expiry_date >= CURRENT_DATE
         ORDER BY b.expiry_date ASC
       `, [product_id]);
 
@@ -68,8 +68,8 @@ router.post('/sale', authenticateToken, async (req, res) => {
 
                 // Update batch
                 await conn.query(`
-          UPDATE batches SET quantity_sold = quantity_sold + ?, quantity_remaining = quantity_remaining - ?
-          WHERE id = ?
+          UPDATE batches SET quantity_sold = quantity_sold + $1, quantity_remaining = quantity_remaining - $2
+          WHERE id = $3
         `, [allocatedQty, allocatedQty, batch.id]);
 
                 remainingQty -= allocatedQty;
@@ -79,23 +79,24 @@ router.post('/sale', authenticateToken, async (req, res) => {
         const profit = totalAmount - totalCost;
 
         // Create sale record
-        const [saleResult] = await conn.query(`
+        const [saleRows] = await conn.query(`
       INSERT INTO sales (transaction_id, user_id, total_amount, total_cost, profit, payment_method, mpesa_phone, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'completed')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed')
+      RETURNING id
     `, [transactionId, req.user.id, totalAmount, totalCost, profit, payment_method, mpesa_phone || null]);
 
-        const saleId = saleResult.insertId;
+        const saleId = saleRows[0].id;
 
         // Create sale items
         for (const si of saleItems) {
             await conn.query(`
         INSERT INTO sale_items (sale_id, product_id, batch_id, quantity, unit_price, cost_price, subtotal)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `, [saleId, si.product_id, si.batch_id, si.quantity, si.unit_price, si.cost_price, si.subtotal]);
         }
 
         // Audit log
-        await conn.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await conn.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'SALE', `Sale ${transactionId}: KES ${totalAmount.toFixed(2)}, Method: ${payment_method}`]);
 
         await conn.commit();
@@ -129,7 +130,7 @@ router.post('/mpesa-stk', authenticateToken, async (req, res) => {
     try {
         const db = await getDb();
         const settings = {};
-        const [rows] = await db.query('SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE ?', ['mpesa_%']);
+        const [rows] = await db.query('SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE $1', ['mpesa_%']);
         rows.forEach(s => {
             settings[s.setting_key] = s.setting_value;
         });
@@ -166,22 +167,22 @@ router.post('/cancel-sale', authenticateToken, async (req, res) => {
     try {
         await conn.beginTransaction();
 
-        const [saleRows] = await conn.query('SELECT * FROM sales WHERE id = ?', [sale_id]);
+        const [saleRows] = await conn.query('SELECT * FROM sales WHERE id = $1', [sale_id]);
         const sale = saleRows[0];
 
         if (!sale) throw new Error('Sale not found.');
         if (sale.status === 'cancelled') throw new Error('Sale already cancelled.');
 
         // Restore stock
-        const [saleItems] = await conn.query('SELECT * FROM sale_items WHERE sale_id = ?', [sale_id]);
+        const [saleItems] = await conn.query('SELECT * FROM sale_items WHERE sale_id = $1', [sale_id]);
         for (const item of saleItems) {
-            await conn.query('UPDATE batches SET quantity_sold = quantity_sold - ?, quantity_remaining = quantity_remaining + ? WHERE id = ?',
+            await conn.query('UPDATE batches SET quantity_sold = quantity_sold - $1, quantity_remaining = quantity_remaining + $2 WHERE id = $3',
                 [item.quantity, item.quantity, item.batch_id]);
         }
 
-        await conn.query("UPDATE sales SET status = 'cancelled' WHERE id = ?", [sale_id]);
+        await conn.query("UPDATE sales SET status = 'cancelled' WHERE id = $1", [sale_id]);
 
-        await conn.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await conn.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'SALE_CANCEL', `Cancelled sale ${sale.transaction_id}. Reason: ${reason || 'N/A'}`]);
 
         await conn.commit();
@@ -203,13 +204,13 @@ router.get('/search', authenticateToken, async (req, res) => {
         const db = await getDb();
         const [products] = await db.query(`
       SELECT p.id, p.name, p.generic_name, p.brand_name, p.category, p.dosage_form, p.strength,
-        COALESCE(SUM(CASE WHEN b.expiry_date >= CURDATE() THEN b.quantity_remaining ELSE 0 END), 0) as available_stock,
-        MIN(CASE WHEN b.quantity_remaining > 0 AND b.expiry_date >= CURDATE() THEN b.selling_price END) as price
+        COALESCE(SUM(CASE WHEN b.expiry_date >= CURRENT_DATE THEN b.quantity_remaining ELSE 0 END), 0) as available_stock,
+        MIN(CASE WHEN b.quantity_remaining > 0 AND b.expiry_date >= CURRENT_DATE THEN b.selling_price END) as price
       FROM products p
       LEFT JOIN batches b ON p.id = b.product_id
-      WHERE p.is_active = 1 AND (p.name LIKE ? OR p.generic_name LIKE ? OR p.brand_name LIKE ?)
+      WHERE p.is_active = 1 AND (p.name LIKE $1 OR p.generic_name LIKE $2 OR p.brand_name LIKE $3)
       GROUP BY p.id
-      HAVING available_stock > 0
+      HAVING COALESCE(SUM(CASE WHEN b.expiry_date >= CURRENT_DATE THEN b.quantity_remaining ELSE 0 END), 0) > 0
       ORDER BY p.name
       LIMIT 20
     `, [`%${q}%`, `%${q}%`, `%${q}%`]);
@@ -227,7 +228,7 @@ router.get('/receipt/:saleId', authenticateToken, async (req, res) => {
         const [saleRows] = await db.query(`
       SELECT s.*, u.full_name as cashier_name
       FROM sales s JOIN users u ON s.user_id = u.id
-      WHERE s.id = ?
+      WHERE s.id = $1
     `, [req.params.saleId]);
         const sale = saleRows[0];
 
@@ -237,7 +238,7 @@ router.get('/receipt/:saleId', authenticateToken, async (req, res) => {
       SELECT si.*, p.name as product_name, p.dosage_form, p.strength
       FROM sale_items si
       JOIN products p ON si.product_id = p.id
-      WHERE si.sale_id = ?
+      WHERE si.sale_id = $1
     `, [req.params.saleId]);
 
         const [settingsRows] = await db.query("SELECT setting_value FROM settings WHERE setting_key = 'pharmacy_name'");
@@ -256,6 +257,5 @@ router.get('/receipt/:saleId', authenticateToken, async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 
 module.exports = router;

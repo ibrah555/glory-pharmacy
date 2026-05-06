@@ -7,7 +7,7 @@ async function seed() {
     const db = await getDb();
 
     // Check if admin already exists
-    const [rows] = await db.query('SELECT id FROM users WHERE username = ?', ['admin']);
+    const [rows] = await db.query('SELECT id FROM users WHERE username = $1', ['admin']);
     if (rows.length > 0) {
       console.log('✅ Super Admin already exists. Skipping seed.');
       return;
@@ -17,7 +17,7 @@ async function seed() {
 
     await db.query(`
       INSERT INTO users (username, full_name, password_hash, role)
-      VALUES (?, ?, ?, ?)
+      VALUES ($1, $2, $3, $4)
     `, ['admin', 'Super Administrator', passwordHash, 'super_admin']);
 
     console.log('✅ Default Super Admin created:');
@@ -34,7 +34,7 @@ async function seed() {
     for (const s of suppliers) {
       await db.query(`
         INSERT INTO suppliers (name, contact_person, phone, email, address)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5)
       `, s);
     }
     console.log('✅ Sample suppliers created.');
@@ -54,21 +54,22 @@ async function seed() {
     ];
 
     for (const p of sampleProducts) {
-      const [result] = await db.query(`
+      const [rows] = await db.query(`
         INSERT INTO products (name, generic_name, brand_name, category, dosage_form, strength, reorder_level, storage_location)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
       `, p);
-      const productId = result.insertId;
+      const productId = rows[0].id;
 
       // Create 2 batches per product with different expiry dates
       await db.query(`
         INSERT INTO batches (product_id, batch_number, expiry_date, cost_price, selling_price, quantity_received, quantity_remaining, supplier_id, received_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `, [productId, `B2026-${String(productId).padStart(3, '0')}A`, '2027-06-30', p[0] === 'Paracetamol' ? 5 : 30 + Math.floor(Math.random() * 50), p[0] === 'Paracetamol' ? 10 : 50 + Math.floor(Math.random() * 100), 200, 200, 1, 1]);
 
       await db.query(`
         INSERT INTO batches (product_id, batch_number, expiry_date, cost_price, selling_price, quantity_received, quantity_remaining, supplier_id, received_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `, [productId, `B2025-${String(productId).padStart(3, '0')}B`, '2026-09-30', p[0] === 'Paracetamol' ? 4 : 25 + Math.floor(Math.random() * 40), p[0] === 'Paracetamol' ? 10 : 45 + Math.floor(Math.random() * 90), 150, 150, 2, 1]);
     }
     console.log('✅ Sample products and batches created.');
@@ -76,7 +77,7 @@ async function seed() {
     // Log the seed action
     await db.query(`
       INSERT INTO audit_logs (user_id, username, action, details)
-      VALUES (?, ?, ?, ?)
+      VALUES ($1, $2, $3, $4)
     `, [1, 'admin', 'SYSTEM_SEED', 'Database seeded with default data']);
 
     console.log('\n🏥 Glory Pharmacy System seeded successfully!');
@@ -86,4 +87,3 @@ async function seed() {
 }
 
 seed();
-

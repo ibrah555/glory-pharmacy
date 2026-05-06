@@ -23,15 +23,15 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
     ] = await Promise.all([
       db.query(`
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
-        FROM sales WHERE DATE(created_at) = CURDATE() AND status = 'completed'
+        FROM sales WHERE created_at::date = CURRENT_DATE AND status = 'completed'
       `),
       db.query(`
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
-        FROM sales WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND status = 'completed'
+        FROM sales WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' AND status = 'completed'
       `),
       db.query(`
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue, COALESCE(SUM(profit), 0) as profit
-        FROM sales WHERE created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01') AND status = 'completed'
+        FROM sales WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE) AND status = 'completed'
       `),
       db.query(`
         SELECT COALESCE(SUM(b.quantity_remaining * b.selling_price), 0) as retail_value,
@@ -49,11 +49,11 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
       `),
       db.query(`
         SELECT COUNT(*) as count FROM batches
-        WHERE expiry_date <= DATE_ADD(CURDATE(), INTERVAL 3 MONTH) AND quantity_remaining > 0
+        WHERE expiry_date <= CURRENT_DATE + INTERVAL '3 months' AND quantity_remaining > 0
       `),
       db.query(`
         SELECT COUNT(*) as count FROM batches
-        WHERE expiry_date < CURDATE() AND quantity_remaining > 0
+        WHERE expiry_date < CURRENT_DATE AND quantity_remaining > 0
       `),
       db.query('SELECT COUNT(*) as count FROM products WHERE is_active = 1'),
       db.query(`
@@ -64,23 +64,14 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
       `)
     ]);
 
-    const today = todayRows[0];
-    const week = weekRows[0];
-    const month = monthRows[0];
-    const inventoryValue = inventoryValueRows[0];
-    const lowStockCount = lowStockRows[0];
-    const expiringCount = expiringRows[0];
-    const expiredCount = expiredRows[0];
-    const totalProducts = totalProductsRows[0];
-
     res.json({
-      today: { ...today },
-      week: { ...week },
-      month: { ...month },
-      inventory: { ...inventoryValue, total_products: totalProducts.count },
-      low_stock_count: lowStockCount.count,
-      expiring_count: expiringCount.count,
-      expired_count: expiredCount.count,
+      today: todayRows[0],
+      week: weekRows[0],
+      month: monthRows[0],
+      inventory: { ...inventoryValueRows[0], total_products: totalProductsRows[0].count },
+      low_stock_count: lowStockRows[0].count,
+      expiring_count: expiringRows[0].count,
+      expired_count: expiredRows[0].count,
       recent_sales: recentSales,
     });
   } catch (err) {
@@ -94,11 +85,11 @@ router.get('/sales-trend', authenticateToken, async (req, res) => {
   try {
     const db = await getDb();
     const [data] = await db.query(`
-      SELECT DATE(created_at) as date, COUNT(*) as transactions,
+      SELECT created_at::date as date, COUNT(*) as transactions,
         SUM(total_amount) as revenue, SUM(profit) as profit
       FROM sales
-      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND status = 'completed'
-      GROUP BY DATE(created_at)
+      WHERE created_at >= CURRENT_DATE - ($1 * INTERVAL '1 day') AND status = 'completed'
+      GROUP BY created_at::date
       ORDER BY date ASC
     `, [parseInt(days)]);
     res.json(data);
@@ -117,10 +108,10 @@ router.get('/top-products', authenticateToken, async (req, res) => {
       FROM sale_items si
       JOIN products p ON si.product_id = p.id
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND s.status = 'completed'
+      WHERE s.created_at >= CURRENT_DATE - ($1 * INTERVAL '1 day') AND s.status = 'completed'
       GROUP BY p.id, p.name, p.category
       ORDER BY total_qty DESC
-      LIMIT ?
+      LIMIT $2
     `, [parseInt(days), parseInt(limit)]);
     res.json(data);
   } catch (err) {
@@ -138,7 +129,7 @@ router.get('/category-sales', authenticateToken, async (req, res) => {
       FROM sale_items si
       JOIN products p ON si.product_id = p.id
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND s.status = 'completed'
+      WHERE s.created_at >= CURRENT_DATE - ($1 * INTERVAL '1 day') AND s.status = 'completed'
       GROUP BY p.category
       ORDER BY total_revenue DESC
     `, [parseInt(days)]);
@@ -153,11 +144,11 @@ router.get('/monthly-revenue', authenticateToken, async (req, res) => {
   try {
     const db = await getDb();
     const [data] = await db.query(`
-      SELECT DATE_FORMAT(created_at, '%Y-%m') as month,
+      SELECT TO_CHAR(created_at, 'YYYY-MM') as month,
         SUM(total_amount) as revenue, SUM(profit) as profit, COUNT(*) as transactions
       FROM sales
-      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) AND status = 'completed'
-      GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+      WHERE created_at >= CURRENT_DATE - INTERVAL '12 months' AND status = 'completed'
+      GROUP BY TO_CHAR(created_at, 'YYYY-MM')
       ORDER BY month ASC
     `);
     res.json(data);
@@ -179,15 +170,33 @@ router.get('/sales', authenticateToken, async (req, res) => {
     `;
     const params = [];
 
-    if (start_date) { query += ' AND DATE(s.created_at) >= ?'; params.push(start_date); }
-    if (end_date) { query += ' AND DATE(s.created_at) <= ?'; params.push(end_date); }
-    if (user_id) { query += ' AND s.user_id = ?'; params.push(user_id); }
-    if (payment_method) { query += ' AND s.payment_method = ?'; params.push(payment_method); }
+    if (start_date) { 
+        params.push(start_date);
+        query += ` AND s.created_at::date >= $${params.length}`; 
+    }
+    if (end_date) { 
+        params.push(end_date);
+        query += ` AND s.created_at::date <= $${params.length}`; 
+    }
+    if (user_id) { 
+        params.push(user_id);
+        query += ` AND s.user_id = $${params.length}`; 
+    }
+    if (payment_method) { 
+        params.push(payment_method);
+        query += ` AND s.payment_method = $${params.length}`; 
+    }
 
     if (product_id || category) {
       query += ` AND s.id IN (SELECT DISTINCT si.sale_id FROM sale_items si JOIN products p ON si.product_id = p.id WHERE 1=1`;
-      if (product_id) { query += ' AND si.product_id = ?'; params.push(product_id); }
-      if (category) { query += ' AND p.category = ?'; params.push(category); }
+      if (product_id) { 
+          params.push(product_id);
+          query += ` AND si.product_id = $${params.length}`; 
+      }
+      if (category) { 
+          params.push(category);
+          query += ` AND p.category = $${params.length}`; 
+      }
       query += ')';
     }
 
@@ -215,20 +224,20 @@ router.get('/smart-insights', authenticateToken, async (req, res) => {
       LEFT JOIN (
         SELECT si.product_id, SUM(si.quantity) as qty 
         FROM sale_items si JOIN sales s ON si.sale_id = s.id 
-        WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL 15 DAY) AND s.status='completed'
+        WHERE s.created_at >= CURRENT_DATE - INTERVAL '15 days' AND s.status='completed'
         GROUP BY si.product_id
       ) as recent ON p.id = recent.product_id
       LEFT JOIN (
         SELECT si.product_id, SUM(si.quantity) as qty 
         FROM sale_items si JOIN sales s ON si.sale_id = s.id 
-        WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) 
-        AND s.created_at < DATE_SUB(CURDATE(), INTERVAL 15 DAY) AND s.status='completed'
+        WHERE s.created_at >= CURRENT_DATE - INTERVAL '30 days' 
+        AND s.created_at < CURRENT_DATE - INTERVAL '15 days' AND s.status='completed'
         GROUP BY si.product_id
       ) as prev ON p.id = prev.product_id
       WHERE p.is_active = 1
       AND COALESCE(recent.qty, 0) > 0 
       AND COALESCE(prev.qty, 0) > 0 
-      AND (COALESCE(recent.qty, 0) / COALESCE(prev.qty, 0)) > 1.25
+      AND (CAST(COALESCE(recent.qty, 0) AS FLOAT) / CAST(COALESCE(prev.qty, 0) AS FLOAT)) > 1.25
     `);
 
     for (const fm of fastMovers) {
@@ -249,11 +258,11 @@ router.get('/smart-insights', authenticateToken, async (req, res) => {
       LEFT JOIN (
         SELECT DISTINCT si.product_id FROM sale_items si
         JOIN sales s ON si.sale_id = s.id
-        WHERE s.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) AND s.status = 'completed'
+        WHERE s.created_at >= CURRENT_DATE - INTERVAL '30 days' AND s.status = 'completed'
       ) as recent_sales ON p.id = recent_sales.product_id
       WHERE p.is_active = 1 AND recent_sales.product_id IS NULL
       GROUP BY p.id, p.name
-      HAVING stock > 0
+      HAVING COALESCE(SUM(b.quantity_remaining), 0) > 0
     `);
 
     for (const ds of deadStock) {
@@ -269,9 +278,9 @@ router.get('/smart-insights', authenticateToken, async (req, res) => {
     const [suspiciousCancels] = await db.query(`
       SELECT u.full_name, COUNT(*) as cancel_count
       FROM audit_logs a JOIN users u ON a.user_id = u.id
-      WHERE a.action = 'SALE_CANCEL' AND a.created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)
-      GROUP BY a.user_id
-      HAVING cancel_count >= 5
+      WHERE a.action = 'SALE_CANCEL' AND a.created_at >= CURRENT_DATE - INTERVAL '1 day'
+      GROUP BY u.full_name, a.user_id
+      HAVING COUNT(*) >= 5
     `);
 
     for (const sc of suspiciousCancels) {
@@ -286,9 +295,9 @@ router.get('/smart-insights', authenticateToken, async (req, res) => {
     const [suspiciousAdjustments] = await db.query(`
       SELECT u.full_name, COUNT(*) as adj_count
       FROM stock_adjustments sa JOIN users u ON sa.user_id = u.id
-      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)
-      GROUP BY sa.user_id
-      HAVING adj_count >= 10
+      WHERE sa.created_at >= CURRENT_DATE - INTERVAL '1 day'
+      GROUP BY u.full_name, sa.user_id
+      HAVING COUNT(*) >= 10
     `);
 
     for (const sa of suspiciousAdjustments) {
@@ -365,11 +374,11 @@ router.get('/export/:type', authenticateToken, authorize('super_admin', 'store_m
           { header: 'Transactions', key: 'transactions', width: 15 },
         ];
         [data] = await db.query(`
-          SELECT DATE_FORMAT(created_at, '%Y-%m') as month,
+          SELECT TO_CHAR(created_at, 'YYYY-MM') as month,
             SUM(total_amount) as revenue, SUM(total_cost) as cost,
             SUM(profit) as profit, COUNT(*) as transactions
           FROM sales WHERE status = 'completed'
-          GROUP BY DATE_FORMAT(created_at, '%Y-%m') ORDER BY month DESC
+          GROUP BY TO_CHAR(created_at, 'YYYY-MM') ORDER BY month DESC
         `);
         break;
 
@@ -406,6 +415,5 @@ router.get('/export/:type', authenticateToken, authorize('super_admin', 'store_m
     res.status(500).json({ error: 'Export failed: ' + err.message });
   }
 });
-
 
 module.exports = router;

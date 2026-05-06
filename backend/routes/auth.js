@@ -14,7 +14,7 @@ router.post('/login', async (req, res) => {
 
     try {
         const db = await getDb();
-        const [rows] = await db.query('SELECT * FROM users WHERE username = ? AND is_active = 1', [username]);
+        const [rows] = await db.query('SELECT * FROM users WHERE username = $1 AND is_active = 1', [username]);
         const user = rows[0];
 
         if (!user) {
@@ -29,7 +29,7 @@ router.post('/login', async (req, res) => {
         const token = generateToken(user);
 
         // Log login action
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [user.id, user.username, 'LOGIN', `User logged in`]);
 
         res.json({
@@ -50,7 +50,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', authenticateToken, async (req, res) => {
     try {
         const db = await getDb();
-        const [rows] = await db.query('SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?', [req.user.id]);
+        const [rows] = await db.query('SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = $1', [req.user.id]);
         const user = rows[0];
         if (!user) return res.status(404).json({ error: 'User not found.' });
         res.json(user);
@@ -84,22 +84,22 @@ router.post('/users', authenticateToken, authorize('super_admin'), async (req, r
 
     try {
         const db = await getDb();
-        const [existing] = await db.query('SELECT id FROM users WHERE username = ?', [username]);
+        const [existing] = await db.query('SELECT id FROM users WHERE username = $1', [username]);
         if (existing.length > 0) {
             return res.status(409).json({ error: 'Username already exists.' });
         }
 
         const passwordHash = await bcrypt.hash(password, 10);
-        const [result] = await db.query(
-            'INSERT INTO users (username, full_name, password_hash, role) VALUES (?, ?, ?, ?)',
+        const [rows] = await db.query(
+            'INSERT INTO users (username, full_name, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id',
             [username, full_name, passwordHash, role]
         );
 
         // Audit log
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'USER_CREATE', `Created user: ${username} (${role})`]);
 
-        res.status(201).json({ id: result.insertId, username, full_name, role });
+        res.status(201).json({ id: rows[0].id, username, full_name, role });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -111,28 +111,37 @@ router.put('/users/:id', authenticateToken, authorize('super_admin'), async (req
 
     try {
         const db = await getDb();
-        const [rows] = await db.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
+        const [rows] = await db.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
         const user = rows[0];
         if (!user) return res.status(404).json({ error: 'User not found.' });
 
         const updates = [];
         const values = [];
 
-        if (full_name !== undefined) { updates.push('full_name = ?'); values.push(full_name); }
-        if (role !== undefined) { updates.push('role = ?'); values.push(role); }
-        if (is_active !== undefined) { updates.push('is_active = ?'); values.push(is_active ? 1 : 0); }
+        if (full_name !== undefined) { 
+            values.push(full_name);
+            updates.push(`full_name = $${values.length}`); 
+        }
+        if (role !== undefined) { 
+            values.push(role);
+            updates.push(`role = $${values.length}`); 
+        }
+        if (is_active !== undefined) { 
+            values.push(is_active ? 1 : 0);
+            updates.push(`is_active = $${values.length}`); 
+        }
         if (password) {
-            updates.push('password_hash = ?');
             values.push(await bcrypt.hash(password, 10));
+            updates.push(`password_hash = $${values.length}`);
         }
 
         if (updates.length > 0) {
             values.push(req.params.id);
-            await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+            await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${values.length}`, values);
         }
 
         // Audit log
-        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+        await db.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
             [req.user.id, req.user.username, 'USER_UPDATE', `Updated user ID: ${req.params.id}`]);
 
         res.json({ message: 'User updated successfully.' });
@@ -140,8 +149,5 @@ router.put('/users/:id', authenticateToken, authorize('super_admin'), async (req
         res.status(500).json({ error: err.message });
     }
 });
-
-module.exports = router;
-
 
 module.exports = router;

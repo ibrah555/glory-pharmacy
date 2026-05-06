@@ -6,12 +6,12 @@ const { getDb } = require('../database');
 
 const router = express.Router();
 
-// POST /api/backup — create a backup (Placeholder for MySQL)
+// POST /api/backup — create a backup (Placeholder for Supabase/PostgreSQL)
 router.post('/', authenticateToken, authorize('super_admin'), async (req, res) => {
-    res.status(501).json({ error: 'Database backup via API is currently disabled for MySQL migration. Please use mysqldump.' });
+    res.status(501).json({ error: 'Database backup via API is currently disabled for Supabase. Please use the Supabase dashboard.' });
 });
 
-// GET /api/backup/list — list existing backups
+// GET /api/backup/list — list existing backups (if any local ones exist)
 router.get('/list', authenticateToken, authorize('super_admin'), async (req, res) => {
     try {
         const backupDir = path.join(__dirname, '..', 'backups');
@@ -59,12 +59,12 @@ router.put('/settings', authenticateToken, authorize('super_admin'), async (req,
             for (const [key, value] of Object.entries(updates)) {
                 await conn.query(`
           INSERT INTO settings (setting_key, setting_value, updated_at)
-          VALUES (?, ?, CURRENT_TIMESTAMP)
-          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP
+          VALUES ($1, $2, CURRENT_TIMESTAMP)
+          ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP
         `, [key, value]);
             }
 
-            await conn.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES (?, ?, ?, ?)',
+            await conn.query('INSERT INTO audit_logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)',
                 [req.user.id, req.user.username, 'SETTINGS_UPDATE', `Updated settings: ${Object.keys(updates).join(', ')}`]);
 
             await conn.commit();
@@ -81,4 +81,3 @@ router.put('/settings', authenticateToken, authorize('super_admin'), async (req,
 });
 
 module.exports = router;
-

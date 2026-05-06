@@ -18,13 +18,25 @@ router.get('/', authenticateToken, authorize('super_admin'), async (req, res) =>
     `;
     const params = [];
 
-    if (start_date) { query += ' AND DATE(a.created_at) >= ?'; params.push(start_date); }
-    if (end_date) { query += ' AND DATE(a.created_at) <= ?'; params.push(end_date); }
-    if (user_id) { query += ' AND a.user_id = ?'; params.push(user_id); }
-    if (action) { query += ' AND a.action = ?'; params.push(action); }
+    if (start_date) { 
+        params.push(start_date);
+        query += ` AND a.created_at::date >= $${params.length}`; 
+    }
+    if (end_date) { 
+        params.push(end_date);
+        query += ` AND a.created_at::date <= $${params.length}`; 
+    }
+    if (user_id) { 
+        params.push(user_id);
+        query += ` AND a.user_id = $${params.length}`; 
+    }
+    if (action) { 
+        params.push(action);
+        query += ` AND a.action = $${params.length}`; 
+    }
 
-    query += ' ORDER BY a.created_at DESC LIMIT ?';
     params.push(parseInt(limit));
+    query += ` ORDER BY a.created_at DESC LIMIT $${params.length}`;
 
     const [logs] = await db.query(query, params);
     res.json(logs);
@@ -52,16 +64,16 @@ router.get('/suspicious', authenticateToken, authorize('super_admin'), async (re
     const [cancellations] = await db.query(`
       SELECT u.full_name, u.username, COUNT(*) as count
       FROM audit_logs a JOIN users u ON a.user_id = u.id
-      WHERE a.action = 'SALE_CANCEL' AND a.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-      GROUP BY a.user_id
+      WHERE a.action = 'SALE_CANCEL' AND a.created_at >= CURRENT_DATE - INTERVAL '7 days'
+      GROUP BY u.full_name, u.username, a.user_id
       ORDER BY count DESC
     `);
 
     const [adjustments] = await db.query(`
       SELECT u.full_name, u.username, COUNT(*) as count
       FROM stock_adjustments sa JOIN users u ON sa.user_id = u.id
-      WHERE sa.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-      GROUP BY sa.user_id
+      WHERE sa.created_at >= CURRENT_DATE - INTERVAL '7 days'
+      GROUP BY u.full_name, u.username, sa.user_id
       ORDER BY count DESC
     `);
 
@@ -72,4 +84,3 @@ router.get('/suspicious', authenticateToken, authorize('super_admin'), async (re
 });
 
 module.exports = router;
-
