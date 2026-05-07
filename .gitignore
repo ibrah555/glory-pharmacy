@@ -1,17 +1,12 @@
 # Dependencies
 node_modules/
 dist/
-dist-electron/
-.npmrc
 
 # Environment and Secrets
 .env
 .env.production
 .env.local
 *.log
-railway_vars.txt
-railway_logs.txt
-railway_build_logs.txt
 
 # Database
 *.db*
@@ -22,7 +17,5 @@ backups/
 .vscode/
 .idea/
 
-# Duplicated or Temp folders
-backend/backend/
-frontend/src/src/
-railway_build_error.json
+# Electron (not used in web deployment)
+dist-electron/
