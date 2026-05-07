@@ -9,6 +9,8 @@
     "seed": "node api/seed.js"
   },
   "dependencies": {
+    "@vitejs/plugin-react": "^5.1.4",
+    "vite": "^7.3.1",
     "axios": "^1.13.6",
     "bcryptjs": "^2.4.3",
     "chart.js": "^4.5.1",
@@ -30,8 +32,6 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^5.1.4",
-    "vite": "^7.3.1",
     "typescript": "~5.9.3",
     "nodemon": "^3.1.0"
   }
